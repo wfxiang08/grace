@@ -21,7 +21,7 @@ import (
 var (
 	logger     *log.Logger
 	didInherit = os.Getenv("LISTEN_FDS") != ""
-	ppid       = os.Getppid()
+	ppid = os.Getppid()
 )
 
 type option func(*app)
@@ -45,13 +45,18 @@ func newApp(servers []*http.Server) *app {
 		listeners: make([]net.Listener, 0, len(servers)),
 		sds:       make([]httpdown.Server, 0, len(servers)),
 
-		preStartProcess: func() error { return nil },
+		preStartProcess: func() error {
+			return nil
+		},
 		// 2x num servers for possible Close or Stop errors + 1 for possible
 		// StartProcess error.
-		errors: make(chan error, 1+(len(servers)*2)),
+		errors: make(chan error, 1 + (len(servers) * 2)),
 	}
 }
 
+//
+// 给所有的Servers创建listener
+//
 func (a *app) listen() error {
 	for _, s := range a.servers {
 		// TODO: default addresses
@@ -68,6 +73,7 @@ func (a *app) listen() error {
 }
 
 func (a *app) serve() {
+	// 所有的Server对外提供服务
 	for i, s := range a.servers {
 		a.sds = append(a.sds, a.http.Serve(s, a.listeners[i]))
 	}
@@ -76,7 +82,9 @@ func (a *app) serve() {
 func (a *app) wait() {
 	var wg sync.WaitGroup
 	wg.Add(len(a.sds) * 2) // Wait & Stop
+
 	go a.signalHandler(&wg)
+
 	for _, s := range a.sds {
 		go func(s httpdown.Server) {
 			defer wg.Done()
@@ -88,8 +96,10 @@ func (a *app) wait() {
 	wg.Wait()
 }
 
+// 关闭所有的Server
 func (a *app) term(wg *sync.WaitGroup) {
 	for _, s := range a.sds {
+		// 通过参数将s传递进去，否则可能所有的go func看到的s都是最后一个Server
 		go func(s httpdown.Server) {
 			defer wg.Done()
 			if err := s.Stop(); err != nil {
@@ -108,7 +118,8 @@ func (a *app) signalHandler(wg *sync.WaitGroup) {
 		case syscall.SIGINT, syscall.SIGTERM:
 			// this ensures a subsequent INT/TERM will trigger standard go behaviour of
 			// terminating.
-			signal.Stop(ch)
+			signal.Stop(ch) // 不在监听signal
+			// 结束
 			a.term(wg)
 			return
 		case syscall.SIGUSR2:
@@ -118,6 +129,7 @@ func (a *app) signalHandler(wg *sync.WaitGroup) {
 			}
 			// we only return here if there's an error, otherwise the new process
 			// will send us a TERM when it's ready to trigger the actual shutdown.
+			// 重启，可以进行Graceful Restart
 			if _, err := a.net.StartProcess(); err != nil {
 				a.errors <- err
 			}
